@@ -6,6 +6,15 @@ export function digest(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+export async function writeAtomic(path, bytes) {
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  const handle = await open(temporary, 'wx', 0o600);
+  try { await handle.writeFile(bytes); await handle.sync(); }
+  finally { await handle.close(); }
+  try { await rename(temporary, path); }
+  finally { await rm(temporary, { force: true }); }
+}
+
 export class Archive {
   constructor(directory) { this.directory = resolve(directory); }
   async initialize() {
@@ -13,12 +22,7 @@ export class Archive {
     await mkdir(join(this.directory, 'receipts'), { recursive: true });
   }
   async writeAtomic(path, bytes) {
-    const temporary = `${path}.${randomUUID()}.tmp`;
-    const handle = await open(temporary, 'wx', 0o600);
-    try { await handle.writeFile(bytes); await handle.sync(); }
-    finally { await handle.close(); }
-    try { await rename(temporary, path); }
-    finally { await rm(temporary, { force: true }); }
+    await writeAtomic(path, bytes);
   }
   async accept(bytes, metadata) {
     await this.initialize();
