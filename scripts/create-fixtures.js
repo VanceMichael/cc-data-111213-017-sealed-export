@@ -1,25 +1,22 @@
-import { mkdir as ensureFixtureDirectory } from 'node:fs/promises';
-await ensureFixtureDirectory('fixtures', {recursive:true});
+// 维护者重建合成资料：全部为合成数据与本地密钥，不接触真实客户资料。
+// 从仓库根目录运行：npm run fixtures
+import { rm } from 'node:fs/promises';
+import { resolve, dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { buildExport, generateKey } from '../src/synthetic.js';
 
-import { mkdir, writeFile } from 'node:fs/promises';
-import { generateKeyPairSync, randomBytes, createCipheriv, createHash, sign } from 'node:crypto';
-await mkdir('fixtures/keys', { recursive: true });
-const key = randomBytes(32);
-await writeFile('fixtures/keys/lab-2026.json', JSON.stringify({ id: 'lab-2026', key: key.toString('base64url') }));
-const blocks = [];
-for (const [position, text] of ['探头,温度\n', 'P1,3.1\n', 'P2,4.2\n'].entries()) {
-  const aad = Buffer.from(JSON.stringify({ exportId: 'export-A', version: 1, position }));
-  const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key, iv);
-  cipher.setAAD(aad);
-  const ciphertext = Buffer.concat([cipher.update(text), cipher.final()]);
-  await writeFile(`fixtures/chunk-${position}.bin`, ciphertext);
-  blocks.push({ position, file: `chunk-${position}.bin`, keyId: 'lab-2026', alg: 'A256GCM',
-    iv: iv.toString('base64url'), tag: cipher.getAuthTag().toString('base64url'), aad: aad.toString('base64url'),
-    sha256: createHash('sha256').update(ciphertext).digest('hex') });
-}
-const pair = generateKeyPairSync('ed25519');
-await writeFile('fixtures/signing-public.txt', pair.publicKey.export({ type: 'spki', format: 'pem' }));
-const payload = Buffer.from(JSON.stringify({ exportId: 'export-A', version: 1, blocks,
-  cleartextSha256: createHash('sha256').update('探头,温度\nP1,3.1\nP2,4.2\n').digest('hex') }));
-await writeFile('fixtures/manifest.json', JSON.stringify({ payload: payload.toString('base64url'),
-  signature: sign(null, payload, pair.privateKey).toString('base64url') }, null, 2));
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures');
+await rm(root, { recursive: true, force: true });
+
+// 轮换场景：块 0 仍由旧 key ID lab-2026 加密，块 1、2 已轮换到 lab-2027；
+// 两个 key ID 在受控目录中共存，接纳时按每块登记的 ID 精确领取。
+const oldKey = generateKey('lab-2026');
+const newKey = generateKey('lab-2027');
+await buildExport(root, {
+  exportId: 'export-A',
+  version: 1,
+  records: ['探头,温度\n', 'P1,3.1\n', 'P2,4.2\n'],
+  keyByPosition: position => (position === 0 ? oldKey : newKey),
+});
+
+console.log(`合成资料已重建于 ${join(root)}（轮换：块0=lab-2026，块1-2=lab-2027）`);
